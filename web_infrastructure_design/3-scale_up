@@ -1,0 +1,73 @@
+3. Scale Up – Infrastructure Explanation
+
+When scaling up a simple web infrastructure, we add new servers and separate components to improve reliability, performance, and security. Below is the required setup and why each element is added.
+
+🖥️ 1. Add 1 More Server
+
+We add another server because:
+
+It increases capacity, so the system can handle more users.
+
+It provides redundancy. If one server fails, the other one can still serve traffic.
+
+It helps distribute workload instead of putting all pressure on one machine.
+
+🔀 2. Add a Load Balancer (HAProxy) and Configure It as a Cluster
+
+We set up two HAProxy load balancers working as a cluster.
+
+Why we add this:
+
+To distribute the traffic between servers.
+
+To avoid overload on a single server.
+
+A load balancer cluster gives high availability:
+
+If one load balancer goes down, the second one automatically continues working.
+
+It improves the overall reliability of the infrastructure.
+
+📂 3. Split Components Into Their Own Servers
+
+We separate the architecture into:
+
+Web server (Nginx/Apache)
+
+Application server (Flask, Django, Node.js, etc.)
+
+Database server (MySQL, PostgreSQL, or MongoDB)
+
+Why we do this:
+
+Web Server
+
+Handles static files (HTML, CSS, images) efficiently.
+
+Improves performance by offloading static traffic from the application server.
+
+Application Server
+
+Runs backend logic.
+
+Separation improves security and makes debugging easier.
+
+Allows scaling backend services independently.
+
+Database Server
+
+Stores persistent data safely.
+
+Isolation improves data security.
+
+Allows independent scaling and backup without affecting other layers.
+
+🧠 Summary: Why This Infrastructure is Better
+Component	Why It Was Added
+Additional Server	Higher capacity + redundancy
+HAProxy Load Balancer (Cluster)	Traffic distribution + high availability
+Web Server	Better handling of static resources
+Application Server	Efficient backend processing
+Database Server	Data safety + isolated scaling
+
+This infrastructure supports scalability, fault tolerance, security, and better performance, which are the core goals of modern web systems.
