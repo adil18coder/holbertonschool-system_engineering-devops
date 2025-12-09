@@ -1,0 +1,157 @@
+Scenario Start: How a user accesses the website
+
+A user opens their browser and types www.foobar.com
+.
+
+The browser asks the DNS servers: “What is the IP of www.foobar.com?”
+
+DNS returns 8.8.8.8.
+
+The user’s device now sends an HTTP/HTTPS request to 8.8.8.8, which is the IP of our server.
+
+The server receives the request and processes it using:
+
+Nginx (web server)
+
+Application server + code base
+
+MySQL database
+
+The final HTML response is sent back to the user’s browser.
+
+Infrastructure Components
+1. Domain name: foobar.com
+
+A domain name is a human-readable address that maps to an IP.
+
+Its job: help users reach the website easily without remembering IP numbers.
+
+2. DNS Record (www.foobar.com
+)
+
+The www record is a CNAME or A record.
+
+Here, because it points directly to an IP (8.8.8.8), it is an A record.
+
+3. The Server (IP: 8.8.8.8)
+
+A server is a powerful computer that runs software to deliver websites to users.
+
+On this one server we host everything:
+
+Web server (Nginx)
+
+Application server
+
+Application code
+
+MySQL database
+
+Software Roles Inside the Server
+4. Web Server (Nginx)
+
+First component to receive user requests.
+
+Handles:
+
+HTTP/HTTPS traffic
+
+Static files (CSS, images, JS)
+
+Reverse proxying to the application server
+
+5. Application Server
+
+Runs the backend code (Python, PHP, Node.js, Ruby, etc.).
+
+Handles business logic:
+
+Authentication
+
+Processing forms
+
+Managing sessions
+
+Preparing dynamic content
+
+6. Application Files (Code Base)
+
+Your website’s backend and frontend code.
+
+It is executed by the application server.
+
+7. Database (MySQL)
+
+Stores:
+
+Users
+
+Posts
+
+Orders
+
+Any data the app needs
+
+Application communicates with MySQL using SQL queries.
+
+Communication Between Server & User
+
+The server uses HTTP/HTTPS protocols to send responses to the user’s computer.
+
+The network connection is through TCP/IP.
+
+Whiteboard Diagram (written form)
+User Browser
+     |
+   DNS: www.foobar.com → 8.8.8.8
+     |
+     v
++----------------------------+
+|        Single Server       |  (IP: 8.8.8.8)
+|                            |
+|     [ Nginx Web Server ]   |
+|            |               |
+|   Reverse Proxy to App     |
+|            v               |
+|   [ Application Server ]   |
+|            |               |
+|     Runs Application Code  |
+|            |               |
+|          MySQL             |
+|       [ Database ]         |
++----------------------------+
+
+Problems / Issues with This Infrastructure
+1. Single Point of Failure (SPOF)
+
+If the server crashes, the entire website goes offline.
+
+All components are on one machine → one failure breaks everything.
+
+2. Downtime During Maintenance
+
+Restarting:
+
+Nginx
+
+Application server
+
+MySQL
+
+Or deploying new code
+
+Causes temporary downtime.
+
+3. Cannot Scale With High Traffic
+
+All traffic goes to one server.
+
+If traffic increases:
+
+CPU becomes overloaded
+
+RAM becomes full
+
+MySQL slows down
+
+There is no load balancer, no replication.
