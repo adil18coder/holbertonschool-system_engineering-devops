@@ -1,0 +1,183 @@
+2 — Secured and Monitored Web Infrastructure (three-server design)
+Scenario start: user requests the site
+
+A user opens their browser and types www.foobar.com. DNS resolves www.foobar.com to the public IP of the load-balancer cluster. The browser initiates an HTTPS connection (TLS) to the load-balancer. The load-balancer terminates TLS (holds the SSL certificate), performs routing (HAProxy), and forwards the request to one of the backend app servers over a secured internal network. Each backend runs Nginx, the application server, the application files, a MySQL instance, a host firewall, and a monitoring client that sends metrics/logs to the central monitoring service.
+
+Topology (ASCII whiteboard)
+                                   Internet
+                                      |
+                                  DNS: www.foobar.com -> <LB_VIP>
+                                      |
+                              +---------------------+
+                              |  HAProxy Load-       |
+                              |  Balancer Cluster    |
+                              |  (SSL cert, TLS)     |
+                              +----+-----------+-----+
+                                   |           |
+               (private network)    |           |
+                +-------------------+-----------+------------------+
+                |                   |           |                  |
+         +------v------+     +------v------+ +---v----+       +-----v------+
+         | Server A    |     | Server B    | | Server C | ... | Monitoring |
+         | - Nginx     |     | - Nginx     | | - Nginx  |     | / Sumo     |
+         | - App server|     | - App server| | - App    |     | (collector)|
+         | - App files |     | - App files | | - App    |     +------------+
+         | - MySQL     |     | - MySQL(R)  | | - MySQL  |
+         | - Firewall  |     | - Firewall  | | - Firewall|
+         | - Monitor   |     | - Monitor   | | - Monitor |
+         +-------------+     +-------------+ +----------+
+Legend:
+- HAProxy LB: terminates SSL, distributes requests
+- Each server: host firewall + Nginx + app + local MySQL + monitoring client
+- Monitoring collectors (Sumo/Datadog/Prometheus Pushgateway) receive metrics/logs from agents
+
+
+Note: The diagram shows three servers. You must have 3 firewalls (one host-level firewall per server), 1 SSL certificate (installed on the LB to serve www.foobar.com), and 3 monitoring clients (one agent per server) that send telemetry to the monitoring backend.
+
+Why each additional element is added
+
+3 Firewalls (one per server) — enforce host-level access control: only allow required ports (80/443 to LB, internal app ports from the LB, SSH only from admin IPs, block MySQL from public). Each server having its own firewall reduces risk if network ACLs fail.
+
+1 SSL Certificate for www.foobar.com — encrypts traffic in transit (confidentiality and integrity). It proves identity of the site to users and prevents eavesdropping or man-in-the-middle attacks.
+
+3 Monitoring clients (agents) — collect metrics (CPU, memory, Nginx metrics), logs (access/error logs), and application traces; they send or expose this data to a central monitoring platform (Sumo Logic, Datadog, Prometheus + Pushgateway, etc.) for alerting and dashboards.
+
+What are firewalls for
+
+Firewalls filter network traffic by allowing or blocking connections based on rules (IP, port, protocol).
+
+They reduce attack surface: e.g., only LB accepts public HTTPS; DB ports (3306) are allowed only from private subnets or specific hosts.
+
+Examples: host-level iptables/ufw, cloud security groups, or network firewall appliances.
+
+Why serve traffic over HTTPS
+
+Confidentiality: encrypts user data (passwords, cookies).
+
+Integrity: prevents tampering of content in transit.
+
+Authentication: TLS certificate confirms the site’s identity.
+
+Browser trust: modern browsers mark plain HTTP sites as “not secure” and may block features.
+
+Use HSTS and strong TLS ciphers to harden the connection.
+
+What monitoring is used for (purpose)
+
+Detect failures (service down, high error rate).
+
+Measure performance (latency, QPS, CPU/memory, DB slow queries).
+
+Alerting (notify on high error rate, disk full).
+
+Capacity planning (trend analysis).
+
+Forensics & debugging (logs/traces for incidents).
+
+How the monitoring tool collects data
+
+There are two common models:
+
+Push model (agent → collector):
+
+Each server runs a monitoring agent (Sumo Logic collector, Datadog agent, or Telegraf) which pushes metrics and logs to a hosted backend over TLS.
+
+Logs can be forwarded in near real-time; metrics are batched/streamed.
+
+Pull model (polling):
+
+A central Prometheus server scrapes metrics endpoints (e.g., http://server:9100/metrics exposed by node_exporter or app exporters).
+
+For environments where scraping is hard, a Pushgateway or agent can be used.
+
+In this design: each server has a monitoring client (agent) that forwards logs and metrics securely to the monitoring backend (push), plus the servers expose metrics endpoints (for Prometheus scraping) if needed.
+
+How to monitor web server QPS (Queries Per Second)
+
+To monitor QPS for Nginx / web server:
+
+Metric source options
+
+Enable Nginx status module (stub_status) or nginx-vts module to expose metrics (active connections, requests_total).
+
+Use Nginx access logs parsed by the agent (count requests per time window).
+
+Exporter / Agent
+
+Use nginx-prometheus-exporter (exposes nginx_requests_total and per-second rates).
+
+Or configure the monitoring agent (Fluentd/Telegraf) to count lines in access log and send metric nginx.qps.
+
+Collection & visualization
+
+Prometheus: rate(nginx_http_requests_total[1m]) gives QPS over last minute.
+
+Hosted services (Datadog/Sumologic): create an ingestion rule or metric from logs and build a dashboard showing QPS and set alerts for thresholds.
+
+Alerting
+
+Create alerts if QPS spikes beyond capacity or if QPS drops suddenly (potential outage).
+
+Why terminating SSL at the load balancer level is an issue
+
+Loss of end-to-end encryption when LB forwards traffic in plaintext to backends unless you re-encrypt to backends.
+
+Trust boundary: internal network must be trusted; if compromised, attackers can read traffic.
+
+Client certificate / mutual TLS becomes harder if LB terminates TLS (you must pass identity info to backends securely).
+
+Logging / compliance: some compliance regimes require encryption all the way to the application.
+
+Mitigations: use TLS between LB and backends (re-encrypt), or use a private network with strong controls, and forward original TLS metadata securely (proxy headers).
+
+Why having only one MySQL server accepting writes is an issue
+
+Single point for writes (SPOF): when the primary fails, writes stop until failover/promotion occurs.
+
+Potential data loss / availability issues if automatic failover is not configured.
+
+Scaling writes is hard: vertical scaling has limits.
+
+Mitigation: implement MySQL Primary-Replica with automatic failover tool (Orchestrator, MHA), or use multi-primary clusters (Galera) or a managed DB that supports automated failover.
+
+Why servers with all the same components (DB, web, app) might be a problem
+
+Resource contention: web/app and DB fight for CPU, memory, disk I/O -> unpredictable performance.
+
+Security: if app layer is compromised, attacker potentially gains access to local DB copies.
+
+Operational complexity: backups, scaling, and maintenance are harder when roles are mixed; separating roles (db hosts, app hosts, cache hosts) simplifies tuning and hardening.
+
+Scaling mismatch: web tier may need many small instances; DB needs fewer, larger instances with dedicated storage.
+
+Mitigation: separate responsibilities: dedicated DB servers (private subnet), app servers behind LB, dedicated caching layer (Redis), and use infrastructure as code.
+
+Additional issues and recommended improvements
+
+SPOF on load-balancer: use an active-active LB pair or cloud LB + health checks; add keepalived for LB high-availability.
+
+No centralized secrets management: use Vault or cloud secret manager for DB credentials and certs.
+
+No automated backups/restore: schedule encrypted DB backups and test restores.
+
+No intrusion detection / WAF: add a Web Application Firewall (ModSecurity, Cloud WAF) to block common attacks (SQLi, XSS).
+
+Insufficient logging/retention: forward logs to Sumo/ELK and set retention and alert rules.
+
+Quick improvement checklist (priority)
+
+Enable TLS between LB and backends (re-encrypt) or use a private network with strict ACLs.
+
+Make LB highly available (2 LBs + virtual IP).
+
+Move DB to dedicated host(s) and implement automated failover/replication.
+
+Harden host firewalls and security groups; disable public access to DB.
+
+Install monitoring agents (metrics + logs + traces) and create QPS dashboards and alerts.
+
+Add a WAF and rate-limiting at the LB.
+
+Short summary
+
+This secured and monitored 3-server design adds host firewalls, an SSL certificate to serve HTTPS, and monitoring agents on every server. It improves confidentiality, visibility, and control versus an unsecured stack. Remaining risks are SSL termination choices, write SPOF on the DB, and the downsides of colocating identical components on all nodes — each can be mitigated with re-encryption, dedicated DB hosts with failover, separation of concerns, and HA for the load-balancer.
