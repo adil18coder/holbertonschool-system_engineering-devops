@@ -1,0 +1,168 @@
+1 — Distributed Web Infrastructure (three-server design)
+Scenario start: a user wants to reach the site
+
+A user opens a browser and types www.foobar.com. DNS resolves www.foobar.com to the public IP of the load-balancer. The user’s browser sends an HTTPS request to the load-balancer. The load-balancer forwards the request to one of the application servers (Nginx reverse proxy → application server). The chosen application server executes application code, possibly reads/writes data to its local MySQL (Primary/Replica setup described below), and the response flows back through the load-balancer to the user.
+
+Topology (ASCII whiteboard)
+                         Internet
+                            |
+                        DNS: www.foobar.com -> <LB_IP>
+                            |
+                       +------------+
+                       | HAProxy LB |
+                       | (public IP) |
+                       +------+-----+
+                              |
+                   +----------+----------+
+                   |                     |
+           +-------v-------+     +-------v-------+
+           | App Server 1  |     | App Server 2  |
+           | - Nginx       |     | - Nginx       |
+           | - App Server  |     | - App Server  |
+           | - App files   |     | - App files   |
+           | - MySQL (P)   |     | - MySQL (R)   |
+           +---------------+     +---------------+
+
+Legend:
+- HAProxy: load-balancer
+- App Server 1: contains Nginx, application runtime, code base, MySQL Primary
+- App Server 2: contains Nginx, application runtime, code base, MySQL Replica
+
+
+Note: Each “App Server” has the web server (Nginx), an application server runtime (e.g., PHP-FPM, Gunicorn, Node), the application files (codebase), and a MySQL instance. MySQL replication is Primary (on Server 1) → Replica (on Server 2).
+
+Why each element is added (justification)
+
+HAProxy (load-balancer) — distributes incoming requests across multiple app servers for better throughput, quicker responses, and some fault tolerance if a backend fails.
+
+Two app servers — provide horizontal scaling (handle more concurrent users), redundancy (if one fails the other can serve), and separation of roles (Primary DB vs Replica).
+
+Nginx (web server) on each app server — handles static files, TLS termination (if configured at the app server), and reverse proxies to the application process. It can also cache static assets.
+
+Application server (e.g., PHP-FPM, Gunicorn) — runs the application logic, processes requests, and interacts with the database.
+
+Application files (codebase) — the source code and static assets required to build responses.
+
+MySQL Primary-Replica — allows replication of data from Primary to Replica for read scaling, backup, and failover scenarios.
+
+Load-balancer configuration and distribution algorithm
+
+Chosen algorithm: leastconn (HAProxy balance leastconn)
+
+How it works:
+
+HAProxy tracks the number of active connections for each backend server.
+
+When a new connection arrives, HAProxy forwards it to the backend with the fewest active connections.
+
+This helps when requests have variable durations because it avoids overloading a server that already has many long-running requests.
+
+Other common options (brief):
+
+roundrobin — cycles through servers equally; simple and fair for similar requests.
+
+source — uses client IP hashing for session stickiness.
+
+leastconn is preferred when request processing times are uneven.
+
+Health checks:
+
+HAProxy performs regular health checks (HTTP/HTTPS) to determine whether a backend is available. If a server fails health checks, HAProxy stops sending traffic to it until it recovers.
+
+Active-Active vs Active-Passive (and what we have)
+
+Active-Active: multiple nodes actively accept and serve traffic at the same time. Example: both App Server 1 and App Server 2 accept requests from HAProxy concurrently. This improves capacity and redundancy.
+
+Active-Passive: one node is active and handles traffic; the other is on standby and takes over only when the active node fails (commonly used for load-balancers with VRRP/keepalived).
+
+In this design: the app servers are Active-Active (both serve traffic). The single HAProxy instance is neither redundant nor high-available (it is a single active LB) — therefore the LB itself is a SPOF unless you add another LB plus VRRP (Active-Passive) or an active pair with DNS/load balancer clustering.
+
+Primary-Replica (Master-Slave) MySQL cluster — how it works
+
+Primary (Master) receives all write operations (INSERT/UPDATE/DELETE).
+
+Replica (Slave) receives a replication stream from the Primary and applies changes to maintain a copy of the data.
+
+Replication can be asynchronous (Replica lags slightly) or semi-synchronous (Primary waits for at least one Replica acknowledgement).
+
+Use cases:
+
+Scale reads by sending SELECT queries to Replicas.
+
+Backup from Replica to avoid impacting Primary.
+
+Failover: promote Replica to Primary in case of Primary failure (requires failover orchestration).
+
+Difference between Primary node and Replica from the application perspective
+
+Writes: the application must send write queries (INSERT/UPDATE/DELETE) to the Primary only.
+
+Reads: the application can send read-only queries (SELECT) either to Primary or to Replicas to distribute load (read scaling).
+
+Consistency: Replicas can lag, so reads immediately after a write may not reflect the most recent change if directed to a Replica (eventual consistency). The application must be designed to handle that (read-after-write patterns may need routing to Primary).
+
+Connection handling: application needs logic or middleware (DB proxy, data source configuration) that routes writes to Primary and reads to Replica(s).
+
+Where are the Single Points Of Failure (SPOF)
+
+HAProxy (single instance) — if it fails, no one can reach backend servers. Mitigation: add a second HAProxy + VRRP/keepalived or use cloud LB.
+
+Primary MySQL — if Primary fails and automatic promotion is not set, writes stop. Mitigation: automated failover tooling (MHA/Orchestrator/Patroni) and backup Primary promotion processes.
+
+Network — single network link or public IP could fail.
+
+Shared storage or configuration (if any) could be SPOF.
+
+Security issues (current design assumes minimal config)
+
+No firewall — servers expose services to the Internet (e.g., MySQL exposed), risk of unauthorized access. Mitigation: configure host firewall (ufw/iptables), restrict DB to internal network only.
+
+No HTTPS / TLS — traffic is sent plain HTTP (sensitive data exposed). Mitigation: terminate TLS at HAProxy or Nginx; obtain certificates (Let’s Encrypt).
+
+No authentication/hardening — default DB passwords, open ports, missing OS hardening.
+
+No segmentation — DB runs on the same servers as app code; better to place DB in private network or separate machines.
+
+No secret management — credentials stored in plain files is risky. Use environment variables / secret stores.
+
+Observability & monitoring (missing)
+
+No monitoring (metrics, logs, alerts) — you cannot detect load spikes, failures, or slow queries.
+
+Add: Prometheus + node_exporter + mysqld_exporter, Grafana dashboards.
+
+Centralized logging: ELK/EFK (Elasticsearch/Fluentd/Kibana) or Loki + Grafana.
+
+Alerts via PagerDuty/Slack/email for critical issues.
+
+No tracing/profiling — add distributed traces (OpenTelemetry/Jaeger) to diagnose latency.
+
+Other operational issues and notes
+
+Deployment downtime: rolling updates are needed to avoid downtime. Use blue/green or rolling deployments via orchestration.
+
+Session management: if the app uses in-memory sessions on each server, users can be bounced between servers and lose session state. Mitigation: use sticky sessions at the LB or store sessions in a shared cache (Redis).
+
+Backup & recovery: implement regular DB backups and test restores.
+
+Replication lag: design the app to tolerate eventual consistency or route critical reads to Primary.
+
+Quick checklist for improving this design (next steps)
+
+Make HAProxy highly available (add second LB + VRRP or use cloud LB).
+
+Move DB to dedicated servers or managed DB service and implement automated failover.
+
+Use TLS (HTTPS) at LB and enable HSTS.
+
+Add firewall rules to restrict MySQL to the private network.
+
+Add monitoring, logging, and alerting (Prometheus + Grafana + centralized logs).
+
+Implement automated CI/CD and rolling deployments.
+
+Use secure credential management and rotate keys/passwords.
+
+Short summary
+
+This three-server design uses a single HAProxy load-balancer and two Active-Active app servers (each with Nginx + application + code). MySQL is configured Primary (Server 1) → Replica (Server 2). This improves scalability and read capacity compared to a single-server stack, but the design still has SPOFs (single LB, Primary DB), lacks security hardening (no firewall/HTTPS), and has no monitoring. Proper next steps are HA for the load-balancer, DB failover automation, TLS, and observability.
